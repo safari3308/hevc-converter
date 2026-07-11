@@ -1,0 +1,54 @@
+name: Cross-Compile Video Engine
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  compile:
+    name: Build Binary
+    runs-on: ubuntu-latest
+    strategy:
+      # The matrix allows GitHub to run all 5 builds in parallel
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            binary_name: VideoEngine-windows-amd64.exe
+          - goos: linux
+            goarch: amd64
+            binary_name: VideoEngine-linux-amd64
+          - goos: linux
+            goarch: arm64
+            binary_name: VideoEngine-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            binary_name: VideoEngine-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            binary_name: VideoEngine-darwin-arm64
+
+    steps:
+    - name: 1. Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 2. Initialize Go Environment
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: 3. Compile Native Statically-Linked Binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.arch }}
+        CGO_ENABLED: 0 # Crucial: Disables dynamic C linking so it runs on any host distribution
+      run: |
+        go build -ldflags="-s -w" -o ${{ matrix.binary_name }} main.go
+
+    - name: 4. Upload System Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.binary_name }}
+        path: ${{ matrix.binary_name }}

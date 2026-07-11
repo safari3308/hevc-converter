@@ -1,0 +1,7 @@
+{
+  "smb_path": "\\\\192.168.1.11\\path\\to\\your\\videos",
+  "local_temp_dir": "C:\\TempEncoder",
+  "log_file_path": "C:\\TempEncoder\\process.log",
+  "video_encoder": "hevc_nvenc",
+  "run_duration_minutes": 120
+}
