@@ -1,17 +1,19 @@
-name: Cross-Compile Video Engine
+name: Release Cross-Compiled Binaries
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    tags:
+      - 'v*' # Triggers automatically when you push a tag starting with 'v' (e.g., v1.0.0)
+
+permissions:
+  contents: write # Crucial: Allows the action to create releases and upload files
 
 jobs:
-  compile:
+  # STAGE 1: Compile all binaries in parallel
+  build:
     name: Build Binary
     runs-on: ubuntu-latest
     strategy:
-      # The matrix allows GitHub to run all 5 builds in parallel
       matrix:
         include:
           - goos: windows
@@ -39,16 +41,39 @@ jobs:
       with:
         go-version: '1.22'
 
-    - name: 3. Compile Native Statically-Linked Binary
+    - name: 3. Compile Native Binary
       env:
         GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.arch }}
-        CGO_ENABLED: 0 # Crucial: Disables dynamic C linking so it runs on any host distribution
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
       run: |
         go build -ldflags="-s -w" -o ${{ matrix.binary_name }} main.go
 
-    - name: 4. Upload System Build Artifact
+    - name: 4. Stash Artifact Temporary
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.binary_name }}
         path: ${{ matrix.binary_name }}
+
+  # STAGE 2: Gather files and publish the official GitHub Release
+  release:
+    name: Create GitHub Release
+    needs: build # Wait for Stage 1 to finish entirely
+    runs-on: ubuntu-latest
+    steps:
+    - name: 1. Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 2. Collect All Compiled Binaries
+      uses: actions/download-artifact@v4
+      with:
+        path: ./binaries
+        merge-multiple: true # Flattens all matrix files into a single directory
+
+    - name: 3. Publish to GitHub Releases
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./binaries/*
+        generate_release_notes: true # Automatically summarizes your commits into a changelog!
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
