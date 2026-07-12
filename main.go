@@ -142,7 +142,7 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 
 	// Step A: Deep Probe Codec, Resolution, and Bitrate using ffprobe
 	var stderr bytes.Buffer
-	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width", "-show_entries", "format=bit_rate", "-of", "default=noprint_wrappers=1:nokey=1", remotePath)
+	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width", "-show_entries", "format=bit_rate", "-of", "default=noprint_wrappers=1", remotePath)
 	cmd.Stderr = &stderr
 
 	out, err := cmd.Output()
