@@ -4,5 +4,6 @@
   "log_file_path": "C:\\TempEncoder\\process.log",
   "video_encoder": "hevc_nvenc",
   "run_duration_minutes": 120,
-  "force_reencode_hevc": false
+  "force_reencode_hevc": false,
+  "cq": 24
 }

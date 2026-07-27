@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ type Config struct {
 	VideoEncoder       string `json:"video_encoder"`
 	RunDurationMinutes int    `json:"run_duration_minutes"`
 	ForceReencodeHEVC  bool   `json:"force_reencode_hevc"`
+	CQ                 int    `json:"cq"`
 }
 
 var (
@@ -241,13 +243,42 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 	}
 	logger.Printf("%s [IO] Staging sync complete in %.2fs", prefix, time.Since(startTime).Seconds())
 
-	// Step D: Transcode via FFmpeg utilizing NVIDIA NVENC
+	// Step D: Transcode via FFmpeg utilizing NVIDIA NVENC / libx265
 	logger.Printf("%s [GPU] Commencing hardware NVENC transcode...", prefix)
 	var ffmpegArgs []string
 	if globalConfig.VideoEncoder == "hevc_nvenc" {
-		ffmpegArgs = []string{"-y", "-i", localInput, "-c:v", "hevc_nvenc", "-pix_fmt", "yuv420p", "-cq", "24", "-c:a", "copy", localOutput}
+		nvencCq := globalConfig.CQ
+		if nvencCq <= 0 {
+			nvencCq = 24 // Default CQ 24 prevents bitrate expansion on high-bitrate sources
+		}
+		// Preserves all streams (-map 0 -c copy), 10-bit color depth (-pix_fmt p010le) to eliminate banding in anime
+		ffmpegArgs = []string{
+			"-y", "-i", localInput,
+			"-map", "0", "-c", "copy",
+			"-c:v", "hevc_nvenc",
+			"-preset", "p6",
+			"-cq", strconv.Itoa(nvencCq),
+			"-pix_fmt", "p010le",
+			"-spatial-aq", "1",
+			"-temporal-aq", "1",
+			localOutput,
+		}
 	} else {
-		ffmpegArgs = []string{"-y", "-i", localInput, "-c:v", "libx265", "-crf", "23", "-preset", "medium", "-c:a", "copy", localOutput}
+		cpuCrf := globalConfig.CQ
+		if cpuCrf <= 0 {
+			cpuCrf = 22
+		}
+		// Preserves all streams (-map 0 -c copy), 10-bit color depth (-pix_fmt yuv420p10le) with x265 anime tuning (-tune animation)
+		ffmpegArgs = []string{
+			"-y", "-i", localInput,
+			"-map", "0", "-c", "copy",
+			"-c:v", "libx265",
+			"-crf", strconv.Itoa(cpuCrf),
+			"-preset", "medium",
+			"-tune", "animation",
+			"-pix_fmt", "yuv420p10le",
+			localOutput,
+		}
 	}
 
 	var ffmpegStderr bytes.Buffer
@@ -266,17 +297,19 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 
 	logger.Printf("%s [GPU] Processing successful. Render Time: %.2f seconds (%.2f minutes)", prefix, conversionDuration.Seconds(), conversionDuration.Minutes())
 
-	// Step E: Post-Conversion Size Evaluation (Loop-Proof Logic)
+	// Step E: Post-Conversion Size Evaluation & Protection
 	originalInfo, _ := os.Stat(localInput)
 	newFileInfo, _ := os.Stat(localOutput)
 	originalSize := originalInfo.Size()
 	newSize := newFileInfo.Size()
 
 	if newSize >= originalSize {
-		logger.Printf("%s [NOTICE] Bitrate expansion observed (Old: %.2f MB, New: %.2f MB). Enforcing upload to prevent job loops.", prefix, float64(originalSize)/(1024*1024), float64(newSize)/(1024*1024))
-	} else {
-		logger.Printf("%s [SHRUNK] Compacting metric: Old: %.2f MB -> New: %.2f MB | Delta Saved: %.2f MB", prefix, float64(originalSize)/(1024*1024), float64(newSize)/(1024*1024), float64(originalSize-newSize)/(1024*1024))
+		logger.Printf("%s [SKIP UPLOAD] Bitrate expansion observed (Old: %.2f MB, New: %.2f MB). Discarding larger output to protect disk space.", prefix, float64(originalSize)/(1024*1024), float64(newSize)/(1024*1024))
+		cleanupWorkerTemp(workerDir)
+		return
 	}
+	
+	logger.Printf("%s [SHRUNK] Compacting metric: Old: %.2f MB -> New: %.2f MB | Delta Saved: %.2f MB", prefix, float64(originalSize)/(1024*1024), float64(newSize)/(1024*1024), float64(originalSize-newSize)/(1024*1024))
 
 	// Step F: Push back to SMB and drop original structure
 	remoteDir := filepath.Dir(remotePath)
