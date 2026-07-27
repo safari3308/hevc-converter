@@ -11,7 +11,8 @@ Built specifically to manage **terabytes of data** safely over strict, time-boxe
 * **🏎️ Dual-Stream Concurrency:** Employs a robust Worker Pool pattern to transcode two videos simultaneously, maximizing your GPU usage and keeping network pipelines saturated.
 * **🛡️ Isolated Sandboxing:** Each concurrent worker processes files inside its own local SSD scratchpad folder (`worker_1/`, `worker_2/`) to eliminate file collision and lock-ups.
 * **⏱️ Strict Time-Boxing:** Monitored execution deadline (configured in minutes). When time runs out, the engine stops pulling new items from the queue and shuts down cleanly.
-* **📉 Smart Pre-Check Filter:** Probes resolution and bitrate via `ffprobe` over the network *before* downloading. If an H.264 file is already highly compressed, it is skipped permanently to save bandwidth and cycles.
+* **📉 Smart Pre-Check Filter:** Probes resolution and bitrate via `ffprobe` over the network *before* downloading. Skips AV1 videos automatically. Ignores embedded cover art (`V:0`) and calculates accurate bitrates even when container headers are missing.
+* **🔄 HEVC Re-encode Flag:** Supports an optional `force_reencode_hevc` flag to compress bloated HEVC Blu-ray files while skipping already-optimized HEVC videos.
 * **🔁 Infinite-Loop Protection:** Post-conversion size checks ensure that even if an H.265 file turns out slightly larger due to NVENC limits, it is written back to the network anyway to permanently flag it as complete, avoiding infinite re-processing loops.
 * **📝 Industrial Logging:** Native `MultiWriter` output flushes real-time metrics (conversion speed, durations, and space savings) to both the console and a persistent `.log` file.
 
@@ -42,11 +43,13 @@ Create a file named `config.json` and adjust the paths to match your environment
   "local_temp_dir": "C:\\TempEncoder",
   "log_file_path": "C:\\TempEncoder\\process.log",
   "video_encoder": "hevc_nvenc",
-  "run_duration_minutes": 60
+  "run_duration_minutes": 60,
+  "force_reencode_hevc": false
 }
 
 ```
 
+> 💡 **`force_reencode_hevc`**: Set to `true` if you have oversized HEVC Blu-ray rips that need re-encoding to lower bitrates. Set to `false` to skip all HEVC videos.
 > ⚠️ **Windows Path Note:** Backslashes in JSON strings must be escaped. Always use double backslashes (`\\`) for local directory maps and quadruple backslashes (`\\\\`) for the initial machine address of a network UNC share.
 
 ---

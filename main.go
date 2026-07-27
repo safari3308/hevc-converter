@@ -21,6 +21,7 @@ type Config struct {
 	LogFilePath        string `json:"log_file_path"`
 	VideoEncoder       string `json:"video_encoder"`
 	RunDurationMinutes int    `json:"run_duration_minutes"`
+	ForceReencodeHEVC  bool   `json:"force_reencode_hevc"`
 }
 
 var (
@@ -140,9 +141,10 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 
 	logger.Printf("%s Analyzing file: %s", prefix, fileName)
 
-	// Step A: Deep Probe Codec, Resolution, and Bitrate using ffprobe
+	// Step A: Deep Probe Codec, Resolution, Duration, and Bitrate using ffprobe
+	// Note: We use -select_streams V:0 (capital V) to select the primary video stream and ignore cover art / attached pictures.
 	var stderr bytes.Buffer
-	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width", "-show_entries", "format=bit_rate", "-of", "default=noprint_wrappers=1", remotePath)
+	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries", "stream=codec_name,width,bit_rate", "-show_entries", "format=bit_rate,duration", "-of", "default=noprint_wrappers=1", remotePath)
 	cmd.Stderr = &stderr
 
 	out, err := cmd.Output()
@@ -154,6 +156,7 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 	var codec string
 	var width int
 	var bitrate int64
+	var durationSec float64
 
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
@@ -165,16 +168,40 @@ func processVideo(workerID int, workerDir string, remotePath string) {
 		} else if strings.HasPrefix(line, "bit_rate=") {
 			var br int64
 			_, err := fmt.Sscanf(line, "bit_rate=%d", &br)
-			if err == nil && br > 0 {
+			if err == nil && br > 0 && bitrate == 0 {
 				bitrate = br
+			}
+		} else if strings.HasPrefix(line, "duration=") {
+			var dur float64
+			_, err := fmt.Sscanf(line, "duration=%f", &dur)
+			if err == nil && dur > 0 {
+				durationSec = dur
 			}
 		}
 	}
 
-	// 1. Immediate exit if it's already H.265
-	if strings.Contains(codec, "hevc") || strings.Contains(codec, "h265") {
-		logger.Printf("%s [SKIP] %s is already H.265.", prefix, fileName)
+	// Fallback: If bitrate could not be determined directly from format/stream headers (e.g. MKV format),
+	// compute average bitrate from file size and duration.
+	if bitrate == 0 && durationSec > 0 {
+		if fileInfo, err := os.Stat(remotePath); err == nil && fileInfo.Size() > 0 {
+			fileSizeBits := float64(fileInfo.Size()) * 8
+			bitrate = int64(fileSizeBits / durationSec)
+		}
+	}
+
+	// 1. Immediate exit if it's AV1 (best modern codec)
+	if strings.Contains(codec, "av1") {
+		logger.Printf("%s [SKIP] %s is already AV1.", prefix, fileName)
 		return
+	}
+
+	// 2. Exit if it's already H.265 / HEVC, unless force_reencode_hevc is enabled
+	if strings.Contains(codec, "hevc") || strings.Contains(codec, "h265") {
+		if !globalConfig.ForceReencodeHEVC {
+			logger.Printf("%s [SKIP] %s is already H.265.", prefix, fileName)
+			return
+		}
+		logger.Printf("%s [FORCE] %s is H.265, but force_reencode_hevc is enabled. Evaluating bitrate compression...", prefix, fileName)
 	}
 
 	// 2. Pre-Check Optimization Matrix
